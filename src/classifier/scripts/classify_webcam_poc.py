@@ -4,11 +4,14 @@ import torchvision.transforms as transforms
 from torchvision.models import mobilenet_v3_large
 from ultralytics import YOLO
 from PIL import Image
+import time
 
 LABELS_PATH = "data/class_labels.txt"
 CLASSIFIER_PATH = "mobilenetv3_bird_classifier.pt"
 IMAGE_SIZE = 224
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+BIRD_CLASS_ID = 14
+INFERENCE_INTERVAL = 0.2
 
 def load_mobilenet(n_classes):
     model = mobilenet_v3_large()
@@ -22,30 +25,16 @@ def load_labels():
     with open(LABELS_PATH, "r", encoding="utf-8") as f:
         return [line.strip() for line in f.readlines()]
 
-def detect_bird_crop(frame, yolo_model):
+def detect_bird_bboxes(frame, yolo_model):
     results = yolo_model(frame)[0]
-    BIRD_CLASS_ID = 14
     bird_boxes = [box.xyxy[0].int().tolist() for box in results.boxes if int(box.cls) == BIRD_CLASS_ID]
     
-    cropped_images = []
+    return bird_boxes
 
-    for box in bird_boxes:
-        x1, y1, x2, y2 = box
-        cropped_images.append(frame[y1:y2, x1:x2])
-    return cropped_images
-
-def capture_and_crop(yolo_model):
-    cap = cv2.VideoCapture(0)
-    print("Press SPACE to capture image")
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            continue
-        cv2.imshow("Webcam - press SPACE to capture", frame)
-        if cv2.waitKey(1) & 0xFF == ord(' '):
-            break
-    cap.release()
-    cv2.destroyAllWindows()
+def main():
+    idx_to_class = load_labels()
+    model = load_mobilenet(len(idx_to_class))
+    yolo_model = YOLO("yolo11n.pt") # YOLO("yolov8n.pt")
 
     transform = transforms.Compose([
         transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
@@ -54,33 +43,67 @@ def capture_and_crop(yolo_model):
                             std=[0.229, 0.224, 0.225])
     ])
 
-    cropped = detect_bird_crop(frame, yolo_model)
+    last_inference_time = 0
+    predictions = []
+    cap = cv2.VideoCapture(0)
 
-    tensors = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-    for i, img in enumerate(cropped):
-        out_filename = f"cropped{i}.jpg"
-        cv2.imwrite(out_filename, img)
-        print(f"Cropped bird saved to {out_filename}")
+        current_time = time.time()
+        if current_time - last_inference_time > INFERENCE_INTERVAL:
+            predictions = []
+            bboxes = detect_bird_bboxes(frame, yolo_model)
 
-        img_pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        tensors.append(transform(img_pil).unsqueeze(0).to(DEVICE))
-    return tensors
+            for box in bboxes:
+                x1, y1, x2, y2 = box
+                cropped_img = frame[y1:y2, x1:x2]
 
-def main():
-    idx_to_class = load_labels()
-    model = load_mobilenet(len(idx_to_class))
-    yolo_model = YOLO("yolo11n.pt") # YOLO("yolov8n.pt")
+                img_pil = Image.fromarray(cv2.cvtColor(cropped_img, cv2.COLOR_BGR2RGB))
+                img_tensor = transform(img_pil).unsqueeze(0).to(DEVICE)
 
-    input_tensors = capture_and_crop(yolo_model)
+                with torch.no_grad():
+                    outputs = model(img_tensor)
 
-    with torch.no_grad():
-        for i, tensor in enumerate(input_tensors):
-            outputs = model(tensor)
-            _, preds = torch.max(outputs, 1)
-            predicted_idx = preds.item()
-            predicted_class = idx_to_class[predicted_idx] if idx_to_class else predicted_idx
-            print(f"Prediction {i}: {predicted_class}")
+                _, preds = torch.max(outputs, 1)
+                predicted_idx = preds.item()
+                predicted_class = idx_to_class[predicted_idx]
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                cv2.putText(frame, predicted_class, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+            cv2.imshow("Bird Detector", frame)
+
+        if cv2.waitKey(1) == 27:  # ESC to quit
+            break
+
+
+            # x1, y1, x2, y2 = box
+            # cropped_images.append(frame[y1:y2, x1:x2])
+
+        #     results = yolo_model(frame)[0]
+        #     for box in results.boxes:
+        #         cls = int(box.cls.item())
+        #         if cls == 14:  # COCO class 14 = bird
+        #             x1, y1, x2, y2 = map(int, box.xyxy[0])
+        #             cropped = frame[y1:y2, x1:x2]
+        #             if cropped.size == 0:
+        #                 continue
+        #             label = classify_crop(cropped, model, labels)
+        #             predictions.append((x1, y1, x2, y2, label))
+        #     last_inference_time = current_time
+
+        # for x1, y1, x2, y2, label in predictions:
+        #     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        #     cv2.putText(frame, label, (x1, y1 - 10),
+        #                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        # cv2.imshow("Bird Detector", frame)
+        # if cv2.waitKey(1) == 27:  # ESC to quit
+        #     break
+
+    cap.release()
 
 if __name__ == "__main__":
     main()
