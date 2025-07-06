@@ -195,3 +195,4 @@ cython_debug/
 
 bird_dataset/**
 bird_dataset_by_species/**
+bird_image_folder/**

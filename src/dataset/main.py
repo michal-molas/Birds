@@ -59,8 +59,7 @@ if __name__ == "__main__":
     species_df = pd.read_csv("data/birds_poland.csv", sep="\t")
     polish_species = list(species_df["sci_name"])
 
-    # Done up to 190 (exclusive, so next is [190:???])
-    for species in polish_species[140:190]:
+    for species in polish_species:
         print("-------------------------------------------------------------------------")
         print("Species:", species)
 
